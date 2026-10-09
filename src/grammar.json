@@ -153,7 +153,7 @@
         },
         {
           "type": "SYMBOL",
-          "name": "cryptol_code"
+          "name": "cryptol_declarations"
         }
       ]
     },
@@ -1327,6 +1327,36 @@
       ]
     },
     "cryptol_code": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "{{"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "ALIAS",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_cryptol_code_content"
+              },
+              "named": true,
+              "value": "cryptol_content"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "}}"
+        }
+      ]
+    },
+    "cryptol_declarations": {
       "type": "SEQ",
       "members": [
         {

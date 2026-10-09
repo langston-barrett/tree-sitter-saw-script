@@ -103,7 +103,7 @@ let {{
 
 (source_file
   (code_statement
-    (cryptol_code
+    (cryptol_declarations
       (cryptol_content))))
 
 ================================================================================

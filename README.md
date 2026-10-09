@@ -5,8 +5,10 @@
 Vibe-coded. Passes extensive SAWScript corpus, including positive and negative
 tests.
 
-Cryptol code (`{{ ... }}`) and types (`{| ... |}`) are parsed with
-[tree-sitter-cryptol] via [language injection](queries/injections.scm).
+Cryptol code is parsed with [tree-sitter-cryptol] via
+[language injection](queries/injections.scm): `let {{ ... }}` declarations
+with its `cryptol` grammar, `{{ ... }}` expressions with `cryptol_expression`,
+and `{| ... |}` types with `cryptol_type`.
 
 The grammar follows SAW's own parser. A [differential test](script/differential)
 checks that tree-sitter accepts exactly the files that SAW's parser accepts,

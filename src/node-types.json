@@ -253,7 +253,7 @@
       "required": true,
       "types": [
         {
-          "type": "cryptol_code",
+          "type": "cryptol_declarations",
           "named": true
         }
       ]
@@ -261,6 +261,21 @@
   },
   {
     "type": "cryptol_code",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "cryptol_content",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "cryptol_declarations",
     "named": true,
     "fields": {},
     "children": {

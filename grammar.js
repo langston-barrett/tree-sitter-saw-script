@@ -90,7 +90,7 @@ export default grammar({
 
     rec_statement: $ => seq('rec', sep1($.declaration, 'and')),
 
-    code_statement: $ => seq('let', $.cryptol_code),
+    code_statement: $ => seq('let', $.cryptol_declarations),
 
     import_statement: $ => seq(
       'import',
@@ -324,10 +324,18 @@ export default grammar({
       field('field', choice($.identifier, $.number)),
     ),
 
-    // Cryptol code and types.  The contents are parsed as Cryptol by
-    // injection (see queries/injections.scm).
+    // Cryptol code and types.  The contents are parsed with
+    // tree-sitter-cryptol by injection (see queries/injections.scm).
 
+    // A Cryptol expression.
     cryptol_code: $ => seq(
+      '{{',
+      optional(alias($._cryptol_code_content, $.cryptol_content)),
+      '}}',
+    ),
+
+    // Cryptol declarations, as in `let {{ ... }}`.
+    cryptol_declarations: $ => seq(
       '{{',
       optional(alias($._cryptol_code_content, $.cryptol_content)),
       '}}',
