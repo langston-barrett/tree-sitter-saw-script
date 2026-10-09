@@ -8,7 +8,7 @@
 
 ((cryptol_code
   (cryptol_content) @injection.content)
-  (#set! injection.language "cryptol_expression"))
+  (#set! injection.language "cryptol_expr"))
 
 ((cryptol_type
   (cryptol_content) @injection.content)

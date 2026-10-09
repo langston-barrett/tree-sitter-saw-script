@@ -7,7 +7,7 @@ tests.
 
 Cryptol code is parsed with [tree-sitter-cryptol] via
 [language injection](queries/injections.scm): `let {{ ... }}` declarations
-with its `cryptol` grammar, `{{ ... }}` expressions with `cryptol_expression`,
+with its `cryptol` grammar, `{{ ... }}` expressions with `cryptol_expr`,
 and `{| ... |}` types with `cryptol_type`.
 
 The grammar follows SAW's own parser. A [differential test](script/differential)

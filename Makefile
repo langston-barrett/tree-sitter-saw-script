@@ -1,6 +1,6 @@
 LANGUAGE_NAME := tree-sitter-saw-script
 HOMEPAGE_URL := https://github.com/langston-barrett/tree-sitter-saw-script
-VERSION := 0.1.0
+VERSION := 0.2.0
 DESCRIPTION := SAWScript grammar for tree-sitter
 
 # repository
