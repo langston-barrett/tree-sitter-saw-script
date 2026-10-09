@@ -1,0 +1,48 @@
+================================================================================
+Types
+================================================================================
+
+let f : Int -> String -> Bool = g;
+let h : [Term] -> TopLevel (ProofScript ()) = k;
+let r : { a : LLVMSpec, b : (Int, CrucibleSetup Term) } = s;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_statement
+    (declaration
+      (identifier)
+      (function_type
+        (builtin_type)
+        (function_type
+          (builtin_type)
+          (builtin_type)))
+      (identifier)))
+  (let_statement
+    (declaration
+      (identifier)
+      (function_type
+        (list_type
+          (builtin_type))
+        (type_application
+          (builtin_type)
+          (parenthesized_type
+            (type_application
+              (builtin_type)
+              (tuple_type)))))
+      (identifier)))
+  (let_statement
+    (declaration
+      (identifier)
+      (record_type
+        (field_type
+          (identifier)
+          (builtin_type))
+        (field_type
+          (identifier)
+          (tuple_type
+            (builtin_type)
+            (type_application
+              (builtin_type)
+              (builtin_type)))))
+      (identifier))))

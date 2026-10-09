@@ -1,0 +1,1073 @@
+{- |
+Module      : SAWCentral.AST
+Description : Datatypes representing SAWScript statements, expressions, and types.
+License     : BSD3
+Maintainer  : huffman
+Stability   : provisional
+-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns #-}
+
+module SAWCentral.AST
+     ( PrimitiveLifecycle(..)
+     , everythingAvailable
+     , defaultAvailable
+
+     , Name
+
+     , Kind(..)
+     , kindStar, kindStarToStar
+     , kindAddStar
+
+     , TyCtx(..)
+     , TypeProvenance(..)
+     , TypeIndex
+     , TyCon(..)
+     , NamedParamInfo(..), noNames
+     , Type(..)
+     , SchemaNameProvenance(..)
+     , Schema(..)
+     , SchemaPattern(..)
+     , NamedType(..)
+
+     , Expr(..)
+
+     , Pattern(..)
+
+     , Rebindable(..)
+     , Import(..)
+     , Stmt(..)
+
+     , Decl(..)
+     , DeclGroup(..)
+
+     , ppKind, prettyKind
+     , ppTyCtx, prettyTyCtx
+     , ppTyCon
+     , ppType, prettyType
+     , ppSchema, prettySchema
+     , prettyNamedType
+     , ppExpr, prettyExpr
+     , ppPattern, prettyPattern
+     , prettyWholeModule
+
+     , tBool, tInt, tString, tTerm, tType
+     , tAIG, tCFG, tLLVMSpec, tJVMSpec, tMIRSpec
+     , tTopLevel, tProofScript
+     , tArray, tUnit, tTuple, tRecord, tFun
+     , tVar, tApply
+     , tMono, tForall
+     , txBool, txInt, txString, txTerm, txType
+     , txAIG, txCFG, txLLVMSpec, txJVMSpec, txMIRSpec
+     , txTopLevel, txProofScript
+     , txArray, txTuple, txRecord, txFun
+     , txVar, txApply
+     ) where
+
+import qualified SAWSupport.Pretty as PPS
+
+import SAWCentral.Panic (panic)
+import SAWCentral.Position (Pos(..), Positioned(..), maxSpan)
+
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.List (genericReplicate)
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.List (intercalate)
+
+import qualified Prettyprinter as PP
+import           Prettyprinter ((<+>))
+
+import qualified Cryptol.Parser.AST as P (ImportSpec(..), ModName)
+import qualified Cryptol.Utils.Ident as P (identText, modNameChunks)
+
+
+------------------------------------------------------------
+-- Lifecycle / Deprecation
+
+-- | Position in the life cycle of a primitive.
+data PrimitiveLifecycle
+  = Current         {- ^ Currently available in all modes. -}
+  | WarnDeprecated  {- ^ Removal planned, available but causes a warning -}
+  | HideDeprecated  {- ^ Will be removed soon, and available only when
+                         requested. -}
+  | Experimental    {- ^ Will be made @Current@ soon, but available only by
+                         request at the moment. -}
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- | Set of all lifecycle values.
+everythingAvailable :: Set PrimitiveLifecycle
+everythingAvailable = Set.fromList [minBound .. maxBound]
+
+-- | Default set of lifecycle values.
+--   Keep this with its type to make sure it stays current.
+defaultAvailable :: Set PrimitiveLifecycle
+defaultAvailable = Set.fromList [Current, WarnDeprecated]
+
+
+------------------------------------------------------------
+-- Names
+
+type Name = Text
+
+
+------------------------------------------------------------
+-- Kinds
+
+--
+-- For the time being (and likely the foreseeable future) we can
+-- handle kinds using the number of expected type arguments; that is,
+-- Kind 0 is *. (We only actually have things of kind * and * -> *,
+-- but being able to represent more than that makes handling type
+-- application simpler.)
+--
+-- Note that we do have tuples of arbitrary arity, whose internal
+-- constructors notionally have kinds like * -> * -> * -> * and up,
+-- and function types with optional named arguments are more complex
+-- internally. But these never appear unapplied so we don't need (or
+-- want) to reason about their kinds.
+--
+-- We don't support higher-kinded types like monad transformers.
+--
+-- Should we ever want additional structure (e.g. distinguishing the
+-- monad types from other types, adding type-level nats, etc.) we can
+-- extend this representation easily enough.
+--
+
+newtype Kind = Kind { kindNumArgs :: Word }
+  deriving Eq
+
+kindStar :: Kind
+kindStar = Kind 0
+
+kindStarToStar :: Kind
+kindStarToStar = Kind 1
+
+kindAddStar :: Kind -> Kind
+kindAddStar (Kind n) = Kind (n + 1)
+
+
+------------------------------------------------------------
+-- Types
+
+-- | Context for type provenance; basically, what kind of program
+--   element we were looking at when we inferred a type.
+data TyCtx
+  = TyCtxConstant  -- ^ Constants (special cases of expressions)
+  | TyCtxExpr      -- ^ Expressions
+  | TyCtxPat       -- ^ Patterns
+  | TyCtxStmt      -- ^ Statements
+  | TyCtxArgList   -- ^ Expression groups that are function argument lists
+  deriving Eq
+
+-- | Extended provenance/position information for types.
+--
+-- TypeExplicit means that the type was written in the input text
+--    at the given position.
+-- TypeFresh means that the type was generated at the given position
+--    to represent a type that that construct implies must exist.
+-- TypeFailed means that the type arose from a prior type error and
+--    is thus not itself very interesting.
+-- TypeFromForallNamed means that the type was forall-bound from the
+--    named variable at the given position, with the given name, in
+--    the function of the given name.
+-- TypeFromForallFresh means that the type was forall-bound from a
+--    fresh type variable implicitly generated at the given position,
+--    using the given typechecker-generated name, in the function of
+--    the given name.
+-- TypeFromElement means that the construct at the given position
+--    prompted us to choose the accompanying type; e.g. "[]" has type
+--    List t.
+-- TypeFromContext means that the usage of the construct at the given
+--    position prompted us to choose the accompanying type; e.g. in "f
+--    x", f has function type.
+-- TypeFromFuncWithSig means that the type came from the function
+--    header (with adjacent return type annotation) at the given
+--    position. For example: @let foo (x: Int) : Int = ...@. The
+--    span of the position includes the parameter list and return
+--    type but not the function name or the equal sign.
+-- TypeFromFuncWithBody means that the type came from the function
+--    header at the first position, and the function body at the
+--    second position. This is for cases without an explicit type
+--    signature where we inferred the body type.
+--
+-- The positions stored in these will ordinarily be concrete source
+-- positions (`Range`) because they come from parsed source text, but
+-- other things may appear, especially in corner cases. The
+-- typechecker does now attempt to interpret the positions in two
+-- places; however, in both cases if it doesn't get concrete souce
+-- positions it will fall back to the default behavior.
+--
+-- Be aware that `TypeFailed` is operationally significant, which
+-- slightly violates least surprise; we tend to expect positions to be
+-- supplementary information. However, adding either a separate field
+-- to `TyUnifyVar` or a separate `Type` constructor for unification
+-- variables that are errors seems like it would be a mess.
+-- FUTURE: sort this out better.
+-- 
+data TypeProvenance
+  = TypeExplicit Pos
+  | TypeFresh Pos
+  | TypeFailed Pos
+  | TypeFromForallNamed Pos Text Text
+  | TypeFromForallFresh Pos Text Text
+  | TypeFromElement Pos TyCtx
+  | TypeFromContext Pos TyCtx
+  | TypeFromFuncWithSig Pos
+  | TypeFromFuncWithBody Pos Pos
+  deriving Eq
+
+-- | Type for unification variable serial numbers.
+type TypeIndex = Integer
+
+-- | Type for the hardwired types. Note that which types live here and
+--   which are just ordinary abstract types defined in the builtin
+--   types list in Interpreter.hs is pretty arbitrary. Among other
+--   things, these days the @LLVMSetup@, @JVMSetup@, and @MIRSetup@
+--   monad types are not special.
+data TyCon
+  = BoolCon
+  | IntCon
+  | StringCon
+  | TermCon
+  | TypeCon
+  | AIGCon
+  | CFGCon
+  | LLVMSpecCon
+  | JVMSpecCon
+  | MIRSpecCon
+  | TopLevel
+  | ProofScript
+  deriving (Eq, Ord)
+
+-- | Information about the named parameters in a function type
+--   signature.
+--
+--   This form preserves the ordering of the names, though not their
+--   exact positions, and is used specifically to feed the builtin
+--   wrapping logic. (The builtin wrapping logic needs to map the
+--   named parameters onto the last N positional arguments of the
+--   underlying Haskell function; we must preserve the ordering or
+--   utter chaos results.)
+--
+--   The `Int` argument gives the number of positional arguments (all
+--   positional arguments come first in the underlying Haskell
+--   functions); the list argument gives the names of the named
+--   arguments.
+data NamedParamInfo = NamedParamInfo Int [Text]
+
+-- | Dummy `NamedParamInfo` for use where the information is not
+--   needed, such as the typechecker. The only consumer of the
+--   `NamedParamInfo` is the builtin wrapper logic, which is
+--   downstream only from the type signature parser. Elsewhere,
+--   updating or generating the information is not entirely trivial
+--   and there is in general no reason to bother.
+--
+--   FUTURE: a cleaner solution would be to parse to a parse tree
+--   first, which would preserve the ordering (and also generally be
+--   tidier) then pull the info out in the one case we care about it
+--   and discard it otherwise, before lowering to the AST.
+noNames :: NamedParamInfo
+noNames = NamedParamInfo 0 []
+
+-- | Allow splicing two `NamedParamInfo` values together with `<>`.
+instance Semigroup NamedParamInfo where
+    NamedParamInfo n1 nps1 <> NamedParamInfo n2 nps2 =
+        NamedParamInfo (n1 + n2) (nps1 ++ nps2)
+
+-- | Types.
+--
+-- We carry around provenance for types, which wrap the source
+-- positions.
+--
+-- For types we infer, we want to record not just where but also how
+-- the inference happened, so that when we report this to the user
+-- they can see what's going on. (For example, if we infer that a type
+-- must be a function because it's applied to an argument, we record
+-- that it's inferred from context and the position of the context is
+-- the position of the term that was applied.) When the type flows
+-- around during type inference it carries the position info with it.
+--
+-- Note that for a non-primitive type the various layers of the type
+-- may have totally different provenance. (E.g. we might have List Int
+-- where List was inferred from a term "[x]" somewhere but Int came
+-- from an explicit annotation somewhere completely different.) So
+-- printing this information usefully requires some thought.
+--
+-- We have the following constraints that it would be nice to encode
+-- into the types, except it doesn't seem feasible:
+--
+--    - Prior to the @generalize@ step in typechecking,
+--      `TyVar` should always have `TypeExplicit` provenance, and
+--      only `TyUnifyVar` should ever have `TypeFailed` provenance.
+--
+--    - After @generalize@, `TyVar` can have any provenance, because
+--      @generalize@ converts remaining `TyUnifyVar` occurrences to
+--      `TyVar` occurrences. This includes `TypeFailed`.
+--
+--   - Like `TyUnifyVar`, `TypeFailed` should not escape the
+--     typechecker.
+--
+data Type
+  = TyCon TypeProvenance TyCon
+  | TyArray TypeProvenance Type
+  | TyTuple TypeProvenance [Type]
+  | TyRecord TypeProvenance (Map Name Type)
+  | TyFunc TypeProvenance NamedParamInfo [Type] (Map Name Type) Type
+  | TyVar TypeProvenance Name
+    -- | For internal typechecker use only.
+  | TyUnifyVar TypeProvenance TypeIndex
+  | TyApply TypeProvenance Type Type
+
+-- | The positions in type schemes can be either explicit (the user
+--   gave a name at this position) or implicit (a fresh unification
+--   var was generated at this position and ended up getting forall-
+--   bound). XXX: this could use a shorter name.
+data SchemaNameProvenance = SchemaNameExplicit Pos | SchemaNameImplicit Pos
+
+data Schema = Forall [(SchemaNameProvenance, Name)] Type
+
+-- | A schema pattern is like a schema but has potentially multiple
+-- type entries that are meant to match fragments of a complete
+-- schema. (We don't, for now at least, need a separate type for type
+-- patterns and can just use Type.)
+data SchemaPattern = SchemaPattern [(SchemaNameProvenance, Name)] [Type]
+
+-- | The things a (named) TyVar can refer to by its name.
+--
+-- A ConcreteType is a direct substitution for the type variable,
+-- such as one generated by a typedef statement.
+--
+-- AbstractType is an opaque type whose only semantics are the
+-- operations available for it, if any. The name identifies it; the
+-- AbstractType constructor is a placeholder that only serves to
+-- carry the kind information.
+data NamedType = ConcreteType Type | AbstractType Kind
+
+
+------------------------------------------------------------
+-- Expressions
+
+data Expr
+  -- Constants
+  = Bool Pos Bool
+  | String Pos Text
+  | Int Pos Integer
+  | Code Pos Text
+  | CType Pos Text
+  -- Structures
+  | Array  Pos [Expr]
+    -- | A do-block, with zero or more statements and a final expression.
+    --   The body is a pair so it can be carried around as a single object,
+    --   which is convenient in a few places.
+  | Block  Pos ([Stmt], Expr)
+  | Tuple  Pos [Expr]
+  | Record Pos (Map Name Expr)
+  -- Accessors
+  | Index   Pos Expr Expr
+  | Lookup  Pos Expr Name
+  | TLookup Pos Expr Integer
+  -- LC
+  | Var Pos Name
+  -- | All functions are handled as lambdas. We hang onto the name
+  --   from the function declaration (if there was one) for use in
+  --   stack traces. The second position (after the name) is the
+  --   combined position of the whole parameter list. The list of
+  --   patterns holdes the positional parameters; the map from text
+  --   holds the optional named parameters. The elements of that map
+  --   are:
+  --      - the position of the name text
+  --      - the overall position
+  --      - the pattern with the local-facing name (which might be different)
+  --        and any type
+  --      - the default value
+  --   The tuple nesting is supposed to make it possible to remember
+  --   which position is which: the one belonging to the map key is
+  --   the closest to it.
+  | Lambda Pos (Maybe Name) Pos [Pattern] (Map Text (Pos, (Pos, Expr, Pattern))) Expr
+  -- | Function arguments come with an optional name; if present,
+  --   it includes the position of the name string.
+  | Application Pos Expr [(Maybe (Pos, Text), Expr)]
+  -- Sugar
+  | Let Pos DeclGroup Expr
+  | TSig Pos Expr Type
+  | IfThenElse Pos Expr Expr Expr
+
+
+------------------------------------------------------------
+-- Patterns
+
+-- | Patterns.
+--
+--   `PImplicit` represents the `_` in the implicit `_ <- e` that
+--   arises when we see a plain expression in statement context. The
+--   position is the position of the expression `e`. No type can be
+--   provided by the concrete syntax, but we still carry a type slot
+--   for the typechecker to fill in.
+--
+--   `PWild` represents an explicit `_`, and the position is the
+--   position of the `_` along with any type annotation. (So far there
+--   doesn't seem to be any reason to want the position of just the
+--   undersccore.)
+--
+--   Distinguishing `PImplicit` from `PWild` allows the typechecker
+--   to report certain errors correctly instead of hallucinating a
+--   position for the nonexistent underscore.
+--
+--   In `PVar` the first `Pos` is the position of the whole pattern
+--   (including any type) and the second is the position of just the
+--   name itself.
+--
+data Pattern
+  = PImplicit Pos (Maybe Type)
+  | PWild Pos (Maybe Type)
+  | PVar Pos Pos Name (Maybe Type)
+  | PTuple Pos [Pattern]
+
+
+------------------------------------------------------------
+-- Statements
+
+-- | Tracking/state type for the @let rebindable@ behavior.
+data Rebindable
+  = RebindableVar -- ^ produced by @let rebindable@
+  | ReadOnlyVar   -- ^ produced by ordinary @let@ and by @rec@
+  deriving Eq
+
+data Import = Import
+  { iIsSubmodule :: Bool
+  , iModule    :: Either FilePath P.ModName
+  , iIsBacktick :: Bool
+  , iAs        :: Maybe P.ModName
+  , iSpec      :: Maybe P.ImportSpec
+  , iPos       :: Pos
+  }
+
+-- | Statements.
+--
+--   In `StmtCode` the first `Pos` is the position of the whole
+--   construct (including the initial "let") and the second is the
+--   position of just the Cryptol text.
+--
+--   Similarly, in `StmtTypedef` the first `Pos` is the position of
+--   the whole construct (including the expansion) and the second is
+--   the position of the name.
+--
+--   `StmtPushdir` and `StmtPopdir` have no concrete syntax; they are
+--   generated by the @include@ handling. See notes in the interpreter
+--   for why they're needed.
+--
+--   The `Bool` in `StmtInclude` is `True` for @include_once@ and
+--   `False` for ordinary @include@.
+--
+data Stmt
+  = StmtBind     Pos Pattern Expr
+  | StmtLet      Pos Rebindable DeclGroup
+  | StmtCode     Pos Pos Text
+  | StmtImport   Pos Import
+  | StmtInclude  Pos Text Bool
+  | StmtTypedef  Pos Pos Text Type
+  | StmtPushdir  Pos FilePath
+  | StmtPopdir   Pos
+
+
+------------------------------------------------------------
+-- Declarations
+
+-- | Single declaration.
+--
+--   These appear in let expressions and statements; but _not_ in
+--   monad-bind position; those have only patterns and can't be
+--   polymorphic.
+--
+--   Note: the pattern here is the name (or names) we're binding. Any
+--   arguments are stuffed into the body as lambdas.
+data Decl
+  = Decl { dPos :: Pos, dPat :: Pattern, dType :: Maybe Schema, dDef :: Expr }
+
+-- | Systems of mutually recursive declarations.
+--
+--   Note that `Recursive` declarations never use `RebindableVar`.
+data DeclGroup
+  = Recursive [Decl]   -- ^ produced by @rec ... and ...@
+  | NonRecursive Decl  -- ^ produced by @let ...@
+
+
+------------------------------------------------------------
+-- Position extraction
+
+-- | This instance should only be used for cases where we know
+--   the position is meaningful on its own.
+instance Positioned TypeProvenance where
+  getPos prov = case prov of
+      TypeExplicit pos -> pos
+      TypeFresh pos -> pos
+      TypeFailed pos -> pos
+      TypeFromForallNamed pos _ _ -> pos
+      TypeFromForallFresh pos _ _ -> pos
+      TypeFromElement pos _ -> pos
+      TypeFromContext pos _ -> pos
+      TypeFromFuncWithSig pos -> pos
+      TypeFromFuncWithBody pos _morepos -> pos
+
+-- | This is used by the parser where all the provenance is
+--   `TypeExplicit`, and should not really be used downstream from
+--   there. The locations without the accompanying provenance
+--   annotations aren't too meaningful and may be confusing.
+--
+instance Positioned Type where
+  getPos ty = case ty of
+      TyCon prov _ -> getPos prov
+      TyArray prov _ -> getPos prov
+      TyTuple prov _ -> getPos prov
+      TyRecord prov _ -> getPos prov
+      TyFunc prov _ _ _ _ -> getPos prov
+      TyVar prov _ -> getPos prov
+      TyUnifyVar prov _ -> getPos prov
+      TyApply prov _ _ -> getPos prov
+
+instance Positioned Expr where
+  getPos (Bool pos _) = pos
+  getPos (String pos _) = pos
+  getPos (Int pos _) = pos
+  getPos (Code pos _) = pos
+  getPos (CType pos _) = pos
+  getPos (Array pos _) = pos
+  getPos (Block pos _) = pos
+  getPos (Tuple pos _) = pos
+  getPos (Record pos _) = pos
+  getPos (Index pos _ _) = pos
+  getPos (Lookup pos _ _) = pos
+  getPos (TLookup pos _ _) = pos
+  getPos (Var pos _) = pos
+  getPos (Lambda pos _ _ _ _ _) = pos
+  getPos (Application pos _ _) = pos
+  getPos (Let pos _ _) = pos
+  getPos (TSig pos _ _) = pos
+  getPos (IfThenElse pos _ _ _) = pos
+
+instance Positioned Pattern where
+  getPos (PImplicit pos _) = pos
+  getPos (PWild pos _) = pos
+  getPos (PVar fullpos _namepos _ _) = fullpos
+  getPos (PTuple pos _) = pos
+
+instance Positioned Import where
+  getPos = iPos
+
+instance Positioned Stmt where
+  getPos (StmtBind pos _ _)  = pos
+  getPos (StmtLet pos _ _)       = pos
+  getPos (StmtCode allpos _spos _str) = allpos
+  getPos (StmtImport pos _)    = pos
+  getPos (StmtInclude pos _ _)    = pos
+  getPos (StmtTypedef allpos _apos _a _ty) = allpos
+  getPos (StmtPushdir pos _) = pos
+  getPos (StmtPopdir pos) = pos
+
+instance Positioned DeclGroup where
+  getPos (Recursive ds) = maxSpan ds
+  getPos (NonRecursive d) = getPos d
+
+instance Positioned Decl where
+  getPos = dPos
+
+
+------------------------------------------------------------
+-- Printing
+
+ppKind :: Kind -> Text
+ppKind (Kind n) =
+    Text.intercalate " -> " $ genericReplicate (n + 1) "*"
+
+prettyKind :: Kind -> PPS.Doc
+prettyKind k = PP.pretty $ ppKind k
+
+ppTyCtx :: TyCtx -> Text
+ppTyCtx ctx = case ctx of
+    TyCtxConstant -> "constant"
+    TyCtxExpr     -> "expression"
+    TyCtxPat      -> "pattern"
+    TyCtxStmt     -> "statement"
+    TyCtxArgList  -> "argument list"
+
+prettyTyCtx :: TyCtx -> PP.Doc ann
+prettyTyCtx ctx = PP.pretty $ ppTyCtx ctx
+
+ppTyCon :: TyCon -> Text
+ppTyCon tc = case tc of
+    BoolCon        -> "Bool"
+    IntCon         -> "Int"
+    StringCon      -> "String"
+    TermCon        -> "Term"
+    TypeCon        -> "Type"
+    AIGCon         -> "AIG"
+    CFGCon         -> "CFG"
+    LLVMSpecCon    -> "LLVMSpec"
+    JVMSpecCon     -> "JVMSpec"
+    MIRSpecCon     -> "MIRSpec"
+    TopLevel       -> "TopLevel"
+    ProofScript    -> "ProofScript"
+
+prettyType :: Type -> PPS.Doc
+prettyType = PP.group . visit 0
+  where
+    visit :: Int -> Type -> PPS.Doc
+    visit prec ty0 = case ty0 of
+      TyCon _ ctor ->
+          PP.pretty $ ppTyCon ctor
+      TyArray _ ty1 ->
+              PP.brackets $ visit 0 ty1
+      TyTuple _ args ->
+              PP.align $ PP.parens $ PP.fillSep $ PP.punctuate "," $ map (visit 0) args
+      TyRecord _ fields ->
+          let prettyField (name, ty) =
+                let name' = PP.pretty name
+                    ty' = visit 0 ty
+                in
+                PP.group $ PPS.prettyTypeSig name' ty'
+              fields' = map prettyField $ Map.assocs fields
+              body = PP.sep $ PP.punctuate "," $ fields'
+              body' = PP.flatAlt (PP.indent 3 body) body
+          in
+          PP.braces (PP.line <> body' <> PP.line)
+      TyFunc _ _ params namedParams ret ->
+              let params' = map (\p -> visit 1 p <+> "->") params
+                  oneNamed (n, p) = PP.pretty n <> "?" <> visit 1 p <+> "->"
+                  namedParams' = map oneNamed $ Map.toList namedParams
+                  ret' = visit 0 ret
+                  body = PP.vsep (params' ++ namedParams') <> PP.line <> ret'
+              in
+              if prec > 0 then PP.parens (PP.group body) else body
+
+      TyVar _ n ->
+          PP.pretty n
+      TyUnifyVar _ i ->
+          "t." <> PP.pretty i
+
+      TyApply _ m arg ->
+          let m' = visit 1 m
+              arg' = visit 2 arg
+              body = m' <+> arg'
+          in
+          if prec > 1 then PP.parens body else body
+
+ppType :: PPS.Opts -> Type -> Text
+ppType ppopts ty =
+    PPS.renderText ppopts $ prettyType ty
+
+prettySchema :: Schema -> PPS.Doc
+prettySchema (Forall ns t) =
+    let t' = prettyType t in
+    case ns of
+      [] -> t'
+      _  ->
+          let prettyQuant (_pos, n) = PP.pretty n
+              ns' = PP.braces $ PP.hsep $ PP.punctuate "," $ map prettyQuant ns
+          in
+          ns' <+> t'
+
+ppSchema :: PPS.Opts -> Schema -> Text
+ppSchema ppopts ty =
+    PPS.renderText ppopts $ prettySchema ty
+
+prettyNamedType :: NamedType -> PPS.Doc
+prettyNamedType ty = case ty of
+    ConcreteType ty' -> prettyType ty'
+    AbstractType kind -> "<opaque " <> PP.pretty (ppKind kind) <> ">"
+
+{- not used
+ppNamedType :: PPS.Opts -> NamedType -> Text
+ppNamedType ppopts ty =
+    PPS.renderText ppopts $ prettyNamedType ty
+-}
+
+prettyExpr :: Expr -> PPS.Doc
+prettyExpr expr0 = case expr0 of
+    Bool _ b   -> PP.viaShow b
+    String _ s -> PP.pretty $ PPS.ppStringLiteral s
+    Int _ i    -> PP.pretty i
+    Code _ s   -> PP.braces $ PP.braces $ PP.pretty s
+    CType _ s  -> PP.braces $ "|" <> PP.pretty s <> "|"
+    Array _ xs ->
+        PP.brackets $ PP.fillSep $ PP.punctuate "," (map prettyExpr xs)
+    Block _ (stmts, lastexpr) ->
+        let stmts' = map prettyStmt stmts
+            lastexpr' = prettyExpr lastexpr <> ";"
+            body = PP.align $ PP.vsep (stmts' ++ [lastexpr'])
+            -- You would think this could unconditionally be `PP.nest 3
+            -- body`. But that doesn't work. If you use `PP.nest`,
+            -- `PP.group` throws away the indentation entirely (whether
+            -- or not it groups successfully); if you use `PP.indent`
+            -- instead, it indents when not grouped, but also generates
+            -- spaces when grouped. Explicit use of `PP.flatAlt` seems
+            -- to fix this, but ew. And you'd think this would work by
+            -- default, since folding small blocks to single lines is
+            -- one of the most basic prettyprinting operations.
+            body' = PP.flatAlt (PP.indent 3 body) body
+        in
+        PP.group $ "do" <+> PP.braces (PP.line <> body' <> PP.line)
+    Tuple _ exprs ->
+        PP.parens $ PP.fillSep $ PP.punctuate "," (map prettyExpr exprs)
+    Record _ members ->
+        let prettyMember (name, value) =
+                PP.pretty name <+> "=" <+> prettyExpr value
+            members' = map prettyMember $ Map.assocs members
+            body = PP.sep $ PP.punctuate PP.comma members'
+            body' = PP.flatAlt (PP.indent 3 body) body
+        in
+        PP.group $ PP.braces (PP.line <> body' <> PP.line)
+    Index _ _ _ ->
+        panic "prettyExpr" ["There is no concrete syntax for AST node 'Index'"]
+    Lookup _ expr name ->
+        let expr' = prettyExpr expr
+            name' = PP.pretty name
+        in
+        expr' <> PP.dot <> name'
+    TLookup _ expr n ->
+        let expr' = prettyExpr expr
+            n' = PP.viaShow n
+        in      
+        expr' <> PP.dot <> n'
+    Var _ name ->
+        PP.pretty name
+    Lambda _ _mname _parampos params namedParams expr ->
+        let onePositional pat =
+                let pat' = prettyPattern pat in
+                "\\" <+> pat' <+> "->"
+            oneNamed (name, (_namepos, (_pos, def, pat))) =
+                let name' = PP.pretty name
+                    def' = prettyExpr def
+                    pat' = prettyPattern pat
+                in
+                "\\" <+> name' <+> "@" <+> pat' <+> "?=" <> def' <+> "->"
+            params' = map onePositional params
+            namedParams' = map oneNamed $ Map.toList namedParams
+            expr' = prettyExpr expr
+        in
+        let lines_ = params' ++ namedParams' ++ [expr']
+            -- Now indent each successive line by 3. As elsewhere,
+            -- this needs to be done using PP.flatAlt or it comes out
+            -- wrong.
+            indent line rest =
+                PP.group (line <> PP.line <> PP.flatAlt (PP.indent 3 rest) rest)
+        in
+        -- This will print the last few arguments and the body
+        -- together on the last line if they fit, which matches the
+        -- older behavior. If we decide we don't like that, grouping
+        -- it again will apparently put each piece on its own line if
+        -- the whole thing doesn't fit on one.
+        --
+        -- Note: if you make changes here you probably want to make
+        -- matching changes to the Value printer too.
+        foldr1 indent lines_
+    Application _ f args ->
+        -- XXX FIXME: use precedence to minimize parentheses
+        let f' = prettyExpr f
+            once (mbName, arg) =
+                let arg' = prettyExpr arg in
+                case mbName of
+                    Nothing -> arg'
+                    Just (_pos, name) -> PP.pretty name <> "=" <> arg'
+            args' = map once args
+        in
+        -- XXX: the following baloney is to avoid changing the behavior
+        -- while doing other much more subtle changes elsewhere and should
+        -- be simplified later.
+        --
+        -- Wrap f' in parens, then f' and the first arg, then that and the
+        -- second, etc. Except, not the last.
+        let pairify pieces = case pieces of
+                [] -> PP.emptyDoc
+                [a] -> a
+                a : b : more -> pairify ((PP.parens a <+> b) : more)
+        in
+        pairify (f' : args')
+    Let _ (NonRecursive decl) expr ->
+        let decl' = prettyDef decl
+            expr' = prettyExpr expr
+            -- Break after the "in" when it doesn't fit. Maybe I've
+            -- gotten too used to reading OCaml?
+            line1 = "let" <+> decl' <+> "in"
+            line2 = expr'
+        in
+        PP.group $ line1 <> PP.line <> line2
+    Let _ (Recursive decls) expr ->
+        let decls' = map prettyDef decls
+            expr' = prettyExpr expr
+            decls'' = case decls' of
+              [] -> []  -- (not actually possible)
+              first : rest -> ("rec" <+> first) : map (\d -> "and" <+> d) rest
+        in
+        PP.vsep decls'' <> PP.hardline <> "in" <> PP.hardline <> PP.nest 3 expr'
+    TSig _ expr ty ->
+        let expr' = prettyExpr expr
+            ty' = prettyType ty
+        in
+        PP.parens (expr' <+> PP.colon <+> ty')
+    IfThenElse _ e1 e2 e3 ->
+        let e1' = prettyExpr e1
+            e2' = prettyExpr e2
+            e3' = prettyExpr e3
+            -- plan for four lines
+            line1 = "if" <+> e1' <+> "then"
+            line2 = PP.flatAlt (PP.indent 3 e2') e2'
+            line3 = "else"
+            line4 = PP.flatAlt (PP.indent 3 e3') e3'
+        in
+        -- Use PP.sep so it'll fold to one line if it fits
+        PP.group $ PP.sep [line1, line2, line3, line4]
+
+ppExpr :: PPS.Opts -> Expr -> Text
+ppExpr ppopts e =
+    PPS.renderText ppopts $ prettyExpr e
+
+prettyPattern :: Pattern -> PPS.Doc
+prettyPattern pat =
+    let prettyArg name' mty = case mty of
+          Nothing -> name'
+          Just ty -> PP.parens $ name' <+> PP.colon <+> prettyType ty
+    in   
+    case pat of
+        PImplicit _ mty ->
+          prettyArg "_" mty
+        PWild _ mty ->
+          prettyArg "_" mty
+        PVar _ _ name mty ->
+          prettyArg (PP.pretty name) mty
+        PTuple _ pats ->
+          PP.parens $ PP.fillSep $ PP.punctuate "," $ map prettyPattern pats
+
+ppPattern :: PPS.Opts -> Pattern -> Text
+ppPattern ppopts pat =
+  PPS.renderText ppopts $ prettyPattern pat
+
+prettyStmt :: Stmt -> PPS.Doc
+prettyStmt s0 = case s0 of
+    StmtBind _ (PImplicit _ _ty) expr ->
+       prettyExpr expr <> ";"
+    StmtBind _ (PWild _ _ty) expr ->
+       "_ <-" <+> prettyExpr expr <> ";"
+    StmtBind _ pat expr ->
+       let pat' = prettyPattern pat
+           expr' = prettyExpr expr
+           line1 = pat' <+> "<-"
+           line2 = PP.flatAlt (PP.indent 3 expr') expr'
+       in
+       PP.group $ line1 <> PP.line <> line2 <> ";"
+    StmtLet _ rebindable (NonRecursive decl) ->
+       let header = case rebindable of
+             RebindableVar -> "let rebindable"
+             ReadOnlyVar -> "let"
+           decl' = prettyDef decl
+       in
+       PP.group $ header <+> decl' <> ";"
+    StmtLet _ _ (Recursive decls) ->
+       let decls' = map prettyDef decls
+           decls'' = case decls' of
+             [] -> []  -- (not actually possible)
+             first : rest -> ("rec" <+> first) : map (\d -> "and" <+> d) rest
+       in
+       PP.vsep decls'' <> ";"
+    StmtCode _ _ code ->
+       let code' = PP.braces $ PP.braces $ PP.pretty code in
+       "let" <+> code' <> ";"
+    StmtImport _ imp ->
+       let prettyNames names =
+               let prettyIdent name = PP.pretty $ P.identText name
+                   names' = PP.fillSep $ {- PP.punctuate "," $ -} map prettyIdent names
+                   long = PP.parens $ PP.line <> PP.indent 3 names' <> PP.line
+                   short = PP.parens names'
+               in
+               PP.flatAlt long short
+           prettyModName mn =
+               PP.pretty (intercalate "::" (P.modNameChunks mn))
+           module' = case iModule imp of
+               Left filepath -> PP.dquotes $ PP.pretty filepath
+               Right modName -> prettyModName modName
+           as' = case iAs imp of
+               Nothing -> PP.emptyDoc
+               Just modName -> " as" <+> prettyModName modName
+           spec' = case iSpec imp of
+               Nothing -> PP.emptyDoc
+               Just (P.Hiding names) ->
+                    " hiding" <+> prettyNames names
+               Just (P.Only names) ->
+                    " " <> prettyNames names
+       in
+       PP.group $ "import" <+> module' <> as' <> spec' <> ";"
+    StmtInclude _ name once ->
+        let inc = if once then "include_once" else "include"
+            name' = PP.dquotes $ PP.pretty name
+        in
+        inc <+> name' <> ";"
+    StmtTypedef _ _ name ty ->
+       let name' = PP.pretty name
+           ty' = prettyType ty
+       in
+       PP.group $ "typedef" <+> name' <+> "=" <+> ty' <> ";"
+    StmtPushdir _ dir ->
+       ".pushdir" <+> PP.pretty dir <> ";"
+    StmtPopdir _ ->
+       ".popdir;"
+
+prettyDef :: Decl -> PPS.Doc
+prettyDef (Decl _ pat0 _ def) =
+   let dissectLambda :: Expr -> ([Pattern], Map Text (Pos, (Pos, Expr, Pattern)), Expr)
+       dissectLambda e0 = case e0 of
+          Lambda _pos _name _parampos pats namedpats e1 ->
+              let (morepats, morenamedpats, e1') = dissectLambda e1 in
+              (pats ++ morepats, Map.union namedpats morenamedpats, e1')
+          _ ->
+              ([], Map.empty, e0)
+       (params, namedParams, body) = dissectLambda def
+       params' = map prettyPattern (pat0 : params)
+       oneNamed (x, (_xpos, (_pos, defExpr, pat))) =
+           let x' = PP.pretty x
+               defExpr' = prettyExpr defExpr
+               pat' = prettyPattern pat
+           in
+           x' <+> "@" <+> pat' <+> "?=" <> defExpr'
+       namedParams' = map oneNamed (Map.toList namedParams)
+       allParams' = PP.align $ PP.sep (params' ++ namedParams')
+       body' = prettyExpr body
+       body'' = PP.flatAlt (PP.indent 3 body') body'
+   in
+   allParams' <+> "=" <> PP.line <> body''
+
+prettyWholeModule :: [Stmt] -> PPS.Doc
+prettyWholeModule stmts =
+    let stmts' = PP.vsep $ map prettyStmt stmts in
+    stmts' <> PP.line
+
+
+------------------------------------------------------------
+-- Type formers
+--
+-- The @tx@ forms wrap in `TypeExplicit` and are mostly used by the
+-- parser.
+
+tBool :: TypeProvenance -> Type
+tBool prov = TyCon prov BoolCon
+
+tInt :: TypeProvenance -> Type
+tInt prov = TyCon prov IntCon
+
+tString :: TypeProvenance -> Type
+tString prov = TyCon prov StringCon
+
+tTerm :: TypeProvenance -> Type
+tTerm prov = TyCon prov TermCon
+
+tType :: TypeProvenance -> Type
+tType prov = TyCon prov TypeCon
+
+tAIG :: TypeProvenance -> Type
+tAIG prov = TyCon prov AIGCon
+
+tCFG :: TypeProvenance -> Type
+tCFG prov = TyCon prov CFGCon
+
+tLLVMSpec :: TypeProvenance -> Type
+tLLVMSpec prov = TyCon prov LLVMSpecCon
+
+tJVMSpec :: TypeProvenance -> Type
+tJVMSpec prov = TyCon prov JVMSpecCon
+
+tMIRSpec :: TypeProvenance -> Type
+tMIRSpec prov = TyCon prov MIRSpecCon
+
+tTopLevel :: TypeProvenance -> Type
+tTopLevel prov = TyCon prov TopLevel
+
+tProofScript :: TypeProvenance -> Type
+tProofScript prov = TyCon prov ProofScript
+
+tArray :: TypeProvenance -> Type -> Type
+tArray prov t = TyArray prov t
+
+tUnit :: TypeProvenance -> Type
+tUnit prov = tTuple prov []
+
+tTuple :: TypeProvenance -> [Type] -> Type
+tTuple prov ts = TyTuple prov ts
+
+tRecord :: TypeProvenance -> [(Name, Type)] -> Type
+tRecord prov fields = TyRecord prov (Map.fromList fields)
+
+-- | Create a function type a1 -> a2 -> ... -> b.
+tFun :: TypeProvenance -> NamedParamInfo -> [Type] -> Map Name Type -> Type -> Type
+tFun prov names params namedParams ret = TyFunc prov names params namedParams ret
+
+tVar :: TypeProvenance -> Name -> Type
+tVar prov n = TyVar prov n
+
+tApply :: TypeProvenance -> Type -> Type -> Type
+tApply prov c t = TyApply prov c t
+
+
+tMono :: Type -> Schema
+tMono t = Forall [] t
+
+tForall :: [(SchemaNameProvenance, Name)] -> Schema -> Schema
+tForall xs (Forall ys t) = Forall (xs ++ ys) t
+
+
+txBool :: Pos -> Type
+txBool pos = tBool (TypeExplicit pos)
+
+txInt :: Pos -> Type
+txInt pos = tInt (TypeExplicit pos)
+
+txString :: Pos -> Type
+txString pos = tString (TypeExplicit pos)
+
+txTerm :: Pos -> Type
+txTerm pos = tTerm (TypeExplicit pos)
+
+txType :: Pos -> Type
+txType pos = tType (TypeExplicit pos)
+
+txAIG :: Pos -> Type
+txAIG pos = tAIG (TypeExplicit pos)
+
+txCFG :: Pos -> Type
+txCFG pos = tCFG (TypeExplicit pos)
+
+txLLVMSpec :: Pos -> Type
+txLLVMSpec pos = tLLVMSpec (TypeExplicit pos)
+
+txJVMSpec :: Pos -> Type
+txJVMSpec pos = tJVMSpec (TypeExplicit pos)
+
+txMIRSpec :: Pos -> Type
+txMIRSpec pos = tMIRSpec (TypeExplicit pos)
+
+txTopLevel :: Pos -> Type
+txTopLevel pos = tTopLevel (TypeExplicit pos)
+
+txProofScript :: Pos -> Type
+txProofScript pos = tProofScript (TypeExplicit pos)
+
+txArray :: Pos -> Type -> Type
+txArray pos t = tArray (TypeExplicit pos) t
+
+txTuple :: Pos -> [Type] -> Type
+txTuple pos ts = tTuple (TypeExplicit pos) ts
+
+txRecord :: Pos -> [(Name, Type)] -> Type
+txRecord pos fields = tRecord (TypeExplicit pos) fields
+
+txFun :: Pos -> NamedParamInfo -> [Type] -> Map Name Type -> Type -> Type
+txFun pos n p np r = tFun (TypeExplicit pos) n p np r
+
+txVar :: Pos -> Name -> Type
+txVar pos a = tVar (TypeExplicit pos) a
+
+txApply :: Pos -> Type -> Type -> Type
+txApply pos c t = tApply (TypeExplicit pos) c t

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "saw_script",
+      "camelcase": "SawScript",
+      "title": "SAWScript",
+      "scope": "source.saw",
+      "file-types": [
+        "saw"
+      ],
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm",
+      "injection-regex": "^(saw|saw_script|sawscript)$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "SAWScript grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Langston Barrett",
+        "email": "langston.barrett@gmail.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/langston-barrett/tree-sitter-saw-script"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "java": false,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}

@@ -1,0 +1,3 @@
+# Corpus files on which tree-sitter-saw-script knowingly disagrees with SAW's
+# parser.  Format: <path relative to corpus/><TAB><reason>
+./GaloisInc_saw-script/intTests/test_parse_errors/parser018.saw	Also a syntax error (", Int" after a type), but SAW reports a check in a parser action first

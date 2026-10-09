@@ -1,0 +1,15 @@
+let spec n = do {
+// <- keyword
+//  ^ function
+//       ^ variable.parameter
+//           ^ keyword
+  x <- llvm_fresh_var "x" (llvm_int 32);
+  //   ^ function.call
+  //                  ^ string
+  //                       ^ function.call
+  llvm_return (llvm_term {{ x + 1 }});
+  //                     ^ punctuation.special
+};
+typedef Pair = (Int, Int);
+//      ^ type.definition
+//              ^ type.builtin

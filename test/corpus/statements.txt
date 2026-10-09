@@ -1,0 +1,197 @@
+================================================================================
+Empty file
+================================================================================
+
+--------------------------------------------------------------------------------
+
+(source_file)
+
+================================================================================
+Let, rec, and bind
+================================================================================
+
+let x = 1;
+let rebindable y = 2;
+let f (a : Int) b = a;
+let g : Int -> Int = \x -> x;
+rec even n = if n then odd n else true
+and odd n = even n;
+m <- llvm_load_module "test.bc";
+(a, b) <- return (1, 2);
+(c : Term) <- fresh_symbolic "c" {| [8] |};
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_statement
+    (declaration
+      (identifier)
+      (number)))
+  (let_statement
+    (declaration
+      (identifier)
+      (number)))
+  (let_statement
+    (declaration
+      (identifier)
+      (tuple_pattern
+        (typed_pattern
+          (identifier)
+          (builtin_type)))
+      (identifier)
+      (identifier)))
+  (let_statement
+    (declaration
+      (identifier)
+      (function_type
+        (builtin_type)
+        (builtin_type))
+      (lambda
+        (identifier)
+        (identifier))))
+  (rec_statement
+    (declaration
+      (identifier)
+      (identifier)
+      (if_expression
+        (identifier)
+        (application
+          (identifier)
+          (identifier))
+        (identifier)))
+    (declaration
+      (identifier)
+      (identifier)
+      (application
+        (identifier)
+        (identifier))))
+  (bind_statement
+    (identifier)
+    (application
+      (identifier)
+      (string)))
+  (bind_statement
+    (tuple
+      (identifier)
+      (identifier))
+    (application
+      (identifier)
+      (tuple
+        (number)
+        (number))))
+  (bind_statement
+    (parenthesized_expression
+      (typed_expression
+        (identifier)
+        (builtin_type)))
+    (application
+      (identifier)
+      (string)
+      (cryptol_type
+        (cryptol_content)))))
+
+================================================================================
+Cryptol declarations
+================================================================================
+
+let {{
+  inc : [8] -> [8]
+  inc x = x + 1
+}};
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (code_statement
+    (cryptol_code
+      (cryptol_content))))
+
+================================================================================
+Imports and includes
+================================================================================
+
+import "Foo.cry";
+import "Bar.cry" as Bar;
+import Baz::Quux (f, g);
+import Baz hiding (h);
+import submodule A::B;
+import `F;
+include "other.saw";
+include_once "other.saw";
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_statement
+    (string))
+  (import_statement
+    (string)
+    (qualified_name
+      (identifier)))
+  (import_statement
+    (qualified_name
+      (identifier)
+      (identifier))
+    (import_list
+      (identifier)
+      (identifier)))
+  (import_statement
+    (qualified_name
+      (identifier))
+    (import_list
+      (identifier)))
+  (import_statement
+    (qualified_name
+      (identifier)
+      (identifier)))
+  (import_statement
+    (qualified_name
+      (identifier)))
+  (include_statement
+    (string))
+  (include_statement
+    (string)))
+
+================================================================================
+Typedefs
+================================================================================
+
+typedef Pair = (Int, Int);
+typedef Rec = { a : Int, b : [String] };
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (typedef_statement
+    (identifier)
+    (tuple_type
+      (builtin_type)
+      (builtin_type)))
+  (typedef_statement
+    (identifier)
+    (record_type
+      (field_type
+        (identifier)
+        (builtin_type))
+      (field_type
+        (identifier)
+        (list_type
+          (builtin_type))))))
+
+================================================================================
+Comments
+================================================================================
+
+// A line comment
+/* A /* nested */ block comment */
+print "hi";
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (block_comment)
+  (expression_statement
+    (application
+      (identifier)
+      (string))))

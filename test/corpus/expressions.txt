@@ -1,0 +1,260 @@
+================================================================================
+Application and named arguments
+================================================================================
+
+llvm_verify m "f" [] false spec (w4_unint_z3 ["g"]);
+f x (y = 1) z = 2;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (expression_statement
+    (application
+      (identifier)
+      (identifier)
+      (string)
+      (list)
+      (identifier)
+      (identifier)
+      (parenthesized_expression
+        (application
+          (identifier)
+          (list
+            (string))))))
+  (expression_statement
+    (application
+      (identifier)
+      (identifier)
+      (named_argument
+        (identifier)
+        (number))
+      (named_argument
+        (identifier)
+        (number)))))
+
+================================================================================
+Do blocks
+================================================================================
+
+let spec = do {
+  x <- llvm_fresh_var "x" (llvm_int 32);
+  llvm_execute_func [llvm_term x];
+  llvm_return (llvm_term {{ x + 1 }});
+};
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_statement
+    (declaration
+      (identifier)
+      (do_block
+        (bind_statement
+          (identifier)
+          (application
+            (identifier)
+            (string)
+            (parenthesized_expression
+              (application
+                (identifier)
+                (number)))))
+        (expression_statement
+          (application
+            (identifier)
+            (list
+              (application
+                (identifier)
+                (identifier)))))
+        (expression_statement
+          (application
+            (identifier)
+            (parenthesized_expression
+              (application
+                (identifier)
+                (cryptol_code
+                  (cryptol_content))))))))))
+
+================================================================================
+Let and if expressions
+================================================================================
+
+print (let x = 1 in x);
+print (rec f x = g x and g x = f x in f 1);
+print (if b then 1 else 2);
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (expression_statement
+    (application
+      (identifier)
+      (parenthesized_expression
+        (let_expression
+          (declaration
+            (identifier)
+            (number))
+          (identifier)))))
+  (expression_statement
+    (application
+      (identifier)
+      (parenthesized_expression
+        (rec_expression
+          (declaration
+            (identifier)
+            (identifier)
+            (application
+              (identifier)
+              (identifier)))
+          (declaration
+            (identifier)
+            (identifier)
+            (application
+              (identifier)
+              (identifier)))
+          (application
+            (identifier)
+            (number))))))
+  (expression_statement
+    (application
+      (identifier)
+      (parenthesized_expression
+        (if_expression
+          (identifier)
+          (number)
+          (number))))))
+
+================================================================================
+Literals and data
+================================================================================
+
+print [1, 0x10, 0b101, 0o17];
+print ("a\n\"b\"", ());
+print { a = 1, b = "x" };
+print r.a.0;
+print {{}};
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (expression_statement
+    (application
+      (identifier)
+      (list
+        (number)
+        (number)
+        (number)
+        (number))))
+  (expression_statement
+    (application
+      (identifier)
+      (tuple
+        (string)
+        (tuple))))
+  (expression_statement
+    (application
+      (identifier)
+      (record
+        (field
+          (identifier)
+          (number))
+        (field
+          (identifier)
+          (string)))))
+  (expression_statement
+    (application
+      (identifier)
+      (field_access
+        (field_access
+          (identifier)
+          (identifier))
+        (number))))
+  (expression_statement
+    (application
+      (identifier)
+      (cryptol_code))))
+
+================================================================================
+Named parameters
+================================================================================
+
+let f (x ?= 1) (y @ (a, b) ?= (1, 2)) (w @ v ?= 3 : Int) z = z;
+let g : x? Int -> Int = f;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_statement
+    (declaration
+      (identifier)
+      (parenthesized_parameter
+        (named_parameter
+          (identifier)
+          (number)))
+      (parenthesized_parameter
+        (named_parameter
+          (identifier)
+          (tuple_pattern
+            (identifier)
+            (identifier))
+          (tuple
+            (number)
+            (number))))
+      (parenthesized_parameter
+        (typed_parameter
+          (named_parameter
+            (identifier)
+            (identifier)
+            (number))
+          (builtin_type)))
+      (identifier)
+      (identifier)))
+  (let_statement
+    (declaration
+      (identifier)
+      (function_type
+        (identifier)
+        (builtin_type)
+        (builtin_type))
+      (identifier))))
+
+================================================================================
+Cryptol blocks hide comments
+================================================================================
+
+print {{ 1 /* }} */ + 2 }};
+print {| [8] // |}
+|};
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (expression_statement
+    (application
+      (identifier)
+      (cryptol_code
+        (cryptol_content))))
+  (expression_statement
+    (application
+      (identifier)
+      (cryptol_type
+        (cryptol_content)))))
+
+================================================================================
+Nested records end with separate braces
+================================================================================
+
+let r = {a = {b = 1}};
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_statement
+    (declaration
+      (identifier)
+      (record
+        (field
+          (identifier)
+          (record
+            (field
+              (identifier)
+              (number))))))))

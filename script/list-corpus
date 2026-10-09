@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# List the .saw files in the corpus, relative to the corpus directory.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "${1:-$root/corpus}"
+
+find . -name '*.saw' \( -type f -o -type l \) | LC_ALL=C sort

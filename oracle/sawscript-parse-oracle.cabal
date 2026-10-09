@@ -1,0 +1,48 @@
+cabal-version: 2.4
+name:          sawscript-parse-oracle
+version:       0.1.0
+synopsis:      Classify SAWScript files using SAW's own parser
+license:       MIT
+
+executable sawscript-parse-oracle
+  main-is:            Main.hs
+  hs-source-dirs:     . vendor/src
+  default-language:   Haskell2010
+  default-extensions:
+    DeriveFunctor
+    GeneralizedNewtypeDeriving
+    ImplicitParams
+    ViewPatterns
+  ghc-options:        -threaded
+  build-tool-depends: alex:alex >= 3.1.3, happy:happy >= 2.1
+  other-modules:
+    SAWCentral.AST
+    SAWCentral.Options
+    SAWCentral.Panic
+    SAWCentral.Position
+    SAWCentral.Utils
+    SAWScript.Lexer
+    SAWScript.Panic
+    SAWScript.Parser
+    SAWScript.Token
+    SAWSupport.ConsoleSupport
+    SAWSupport.PanicSupport
+    SAWSupport.Position
+    SAWSupport.Pretty
+    SAWVersion.GitRev
+  build-depends:
+    array,
+    base,
+    bytestring,
+    containers,
+    cryptol,
+    directory,
+    extra,
+    filepath,
+    lens,
+    panic,
+    prettyprinter,
+    prettyprinter-ansi-terminal,
+    text,
+    time,
+    what4
